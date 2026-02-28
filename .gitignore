@@ -1,0 +1,22 @@
+.pypirc
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.env
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Web
+node_modules/
+web/node_modules/
+web/dist/
+web/build/
+web/.next/
+.idea/
+.vscode/
