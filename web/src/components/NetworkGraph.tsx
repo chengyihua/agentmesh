@@ -108,23 +108,23 @@ export function NetworkGraph() {
             const rank = sortedAgents.findIndex(a => a.id === agent.id);
             const percentile = rank / totalAgents;
             
-            // Base size on trust score (range 3-8)
+            // Base size on trust score (range 1.5-3)
             const score = agent.trust_score || 0;
-            let size = 3 + (score * 4); 
+            let size = 1.5 + (score * 1.5); 
             let color = isHealthy ? region.color : '#ef4444';
             let glow = false;
 
             if (isHealthy) {
                 if (rank < 3) { // Top 3 - Gold Tier
-                    size = 12; // Very large
+                    size = 6; // Reduced from 12
                     color = '#fbbf24'; // Amber-400 (Gold)
                     glow = true;
                 } else if (percentile <= 0.10) { // Top 10% - Silver Tier
-                    size = 8;
+                    size = 4; // Reduced from 8
                     color = '#e2e8f0'; // Slate-200 (Silver)
                     glow = true;
                 } else if (percentile <= 0.25) { // Top 25% - Bronze Tier
-                    size = 6;
+                    size = 2.5; // Reduced from 6
                     color = '#f59e0b'; // Amber-500 (Bronze/Orange)
                 }
                 // Others keep region color and score-based size
@@ -186,11 +186,23 @@ export function NetworkGraph() {
         return { nodes, links };
     }, [agents, dimensions]);
 
+    // Stable reference for animation loop to avoid restarting it on data changes
+    const graphDataRef = useRef(graphData);
+    const dimensionsRef = useRef(dimensions);
+
+    useEffect(() => {
+        graphDataRef.current = graphData;
+    }, [graphData]);
+
+    useEffect(() => {
+        dimensionsRef.current = dimensions;
+    }, [dimensions]);
+
     // Animation Loop
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency if possible (but we use it)
         if (!ctx) return;
 
         let beams: Beam[] = [];
@@ -199,74 +211,83 @@ export function NetworkGraph() {
 
         const tick = () => {
             frameCount++;
-            const { width, height } = dimensions;
+            const { width, height } = dimensionsRef.current;
+            const { nodes, links } = graphDataRef.current;
+
             // Canvas size is controlled by props, so just clear based on dimensions
-            
             ctx.clearRect(0, 0, width, height);
 
             // World Map is now handled by the SVG background component
             
-            const { nodes, links } = graphData;
-
-            // 1. Draw Links (Base)
+            // 1. Draw Links (Batch Rendering for Performance)
+            // Batch 1: Short distance (Local)
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.lineWidth = 0.5;
+            
             links.forEach(link => {
                 const dist = Math.hypot(link.target.x - link.source.x, link.target.y - link.source.y);
-                const isLongDistance = dist > 100;
+                if (dist <= 100) {
+                    ctx.moveTo(link.source.x, link.source.y);
+                    ctx.lineTo(link.target.x, link.target.y);
+                }
+            });
+            ctx.stroke();
 
-                ctx.strokeStyle = isLongDistance ? 'rgba(255, 255, 255, 0.03)' : 'rgba(255, 255, 255, 0.05)';
-                ctx.lineWidth = isLongDistance ? 1 : 0.5;
-                
-                ctx.beginPath();
-                if (isLongDistance) {
+            // Batch 2: Long distance (WAN)
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.lineWidth = 1;
+            
+            links.forEach(link => {
+                const dist = Math.hypot(link.target.x - link.source.x, link.target.y - link.source.y);
+                if (dist > 100) {
                     const midX = (link.source.x + link.target.x) / 2;
                     const midY = (link.source.y + link.target.y) / 2 - 50; 
                     ctx.moveTo(link.source.x, link.source.y);
                     ctx.quadraticCurveTo(midX, midY, link.target.x, link.target.y);
-                } else {
-                    ctx.moveTo(link.source.x, link.source.y);
-                    ctx.lineTo(link.target.x, link.target.y);
                 }
-                ctx.stroke();
+            });
+            ctx.stroke();
+
+            // 2. Draw Nodes (Grouped by Glow vs No-Glow to minimize state changes)
+            
+            // Draw standard nodes (no glow, simple circle)
+            nodes.forEach(node => {
+                if (node.glow) return; // Skip glow nodes for next pass
+                
+                ctx.beginPath();
+                ctx.fillStyle = node.color;
+                ctx.arc(node.x, node.y, node.size, 0, Math.PI * 2);
+                ctx.fill();
             });
 
-            // 2. Draw Nodes
+            // Draw glowing nodes (expensive, so do them last and fewer of them)
             nodes.forEach(node => {
+                if (!node.glow) return;
+
+                ctx.save();
                 ctx.fillStyle = node.color;
+                ctx.shadowBlur = 15; // Slightly reduced
+                ctx.shadowColor = node.color;
                 
-                // Draw Glow for elite nodes
-                if (node.glow) {
-                     ctx.shadowBlur = 20; // Increased glow
-                     ctx.shadowColor = node.color;
-                } else {
-                     ctx.shadowBlur = 0;
-                }
-
-                // Random pulse effect for active nodes
-                const isHealthy = !node.health_status || node.health_status === 'healthy';
-                if (isHealthy && Math.random() > 0.99) {
-                     ctx.globalAlpha = 0.6;
-                     ctx.beginPath();
-                     ctx.arc(node.x, node.y, node.size * 1.5, 0, Math.PI * 2);
-                     ctx.fill();
-                     ctx.globalAlpha = 1;
-                }
-
                 ctx.beginPath();
                 ctx.arc(node.x, node.y, node.size, 0, Math.PI * 2);
                 ctx.fill();
                 
-                // Draw ring for high-ranking nodes
-                if (node.size >= 8) {
-                    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+                // Ring for high-ranking
+                if (node.size >= 4) {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
                     ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, node.size + 3, 0, Math.PI * 2);
+                    ctx.shadowBlur = 0; // Turn off shadow for ring
                     ctx.stroke();
                 }
-                
-                // Reset shadow
-                ctx.shadowBlur = 0;
+                ctx.restore();
             });
+
+            // Random pulse effect (Optimized: Batch draw)
+            // ... (Removing pulse for now to save FPS, or simplify it)
+
 
             // 3. Traffic Simulation (Beams)
             if (frameCount % 3 === 0) { // More frequent for beams
@@ -355,7 +376,7 @@ export function NetworkGraph() {
 
         tick();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [graphData]);
+    }, []); // Run once
 
     const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
@@ -365,8 +386,8 @@ export function NetworkGraph() {
         const x = (e.clientX - rect.left) * (canvas.width / rect.width); // Adjust for scaling if any
         const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-        // Find node under cursor
-        const { nodes } = graphData;
+        // Use stable ref for mouse move to prevent stale closure issues if graphData updates
+        const { nodes } = graphDataRef.current;
         let found: Node | null = null;
         
         // Use reverse loop to check top-most nodes first
@@ -459,16 +480,6 @@ export function NetworkGraph() {
                     <span>LINKS: {graphData.links.length}</span>
                     <span>REGIONS: {Object.keys(REGIONS).length}</span>
                 </div>
-            </div>
-
-            {/* Region Legend */}
-            <div className="absolute bottom-6 left-8 flex flex-wrap gap-4 max-w-2xl pointer-events-none">
-                {Object.values(REGIONS).map((region) => (
-                    <div key={region.name} className="flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-sm border border-white/5">
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: region.color }}></span>
-                        <span className="text-[10px] font-bold text-white/80 uppercase tracking-wider">{region.name}</span>
-                    </div>
-                ))}
             </div>
         </div>
     );

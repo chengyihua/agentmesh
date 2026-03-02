@@ -1,6 +1,6 @@
 "use client";
 
-import { Trophy, Medal, Star, TrendingUp, Cpu } from "lucide-react";
+import { Trophy, Medal, Star, TrendingUp, Cpu, Activity, Zap } from "lucide-react";
 import { useLeaderboard } from "@/hooks/useRegistry";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
@@ -12,6 +12,9 @@ interface LeaderboardAgent {
     trust_score: number;
     metrics: {
         heartbeats: number;
+        invocations: number;
+        latency_avg?: number;
+        uptime_percentage?: number;
     };
 }
 
@@ -90,15 +93,37 @@ export function LeaderboardWidget() {
                                         {agent.tier}
                                     </span>
                                 </div>
-                                <div className="flex items-center gap-3 mt-1 text-[9px] font-mono text-muted-foreground">
-                                    <span className="flex items-center gap-1">
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[9px] font-mono text-muted-foreground">
+                                    <span className="flex items-center gap-1" title="Trust Score">
                                         <TrendingUp className="w-2.5 h-2.5" />
-                                        {(agent.trust_score * 100).toFixed(0)}% Trust
+                                        {(agent.trust_score * 100).toFixed(0)}%
                                     </span>
-                                    <span className="flex items-center gap-1">
+                                    <span className="flex items-center gap-1" title="Heartbeats">
                                         <Cpu className="w-2.5 h-2.5" />
-                                        {agent.metrics.heartbeats} beats
+                                        {agent.metrics.heartbeats}
                                     </span>
+                                    {agent.metrics.invocations > 0 && (
+                                        <span className="flex items-center gap-1" title="Invocations">
+                                            <Activity className="w-2.5 h-2.5" />
+                                            {agent.metrics.invocations}
+                                        </span>
+                                    )}
+                                    {(agent.metrics.latency_avg ?? 0) > 0 && (
+                                        <span className="flex items-center gap-1" title="Average Latency">
+                                            <Zap className="w-2.5 h-2.5" />
+                                            {agent.metrics.latency_avg}ms
+                                        </span>
+                                    )}
+                                    {(agent.metrics.uptime_percentage ?? 0) > 0 && (
+                                        <span className={cn(
+                                            "px-1 py-0.5 rounded text-[8px] font-bold border",
+                                            (agent.metrics.uptime_percentage ?? 0) >= 99 
+                                                ? "bg-green-500/10 text-green-500 border-green-500/20" 
+                                                : "bg-white/5 text-muted-foreground border-white/10"
+                                        )} title="Uptime">
+                                            {agent.metrics.uptime_percentage}% up
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         </div>

@@ -1,0 +1,5 @@
+- [x] `EventBus` passes unit tests
+- [x] Backend publishes `AGENT_HEALTH_CHANGED` on status change
+- [x] Backend publishes `AGENT_REGISTERED` / `AGENT_UPDATED` on registration
+- [x] `/events` endpoint streams events correctly (curl test)
+- [x] Frontend receives events and refreshes the agent list

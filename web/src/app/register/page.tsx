@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { solvePoW } from "@/lib/pow";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface RegistrationResponse {
     data?: {
@@ -26,6 +27,7 @@ interface LogEntry {
 
 export default function RegisterPage() {
     const { t } = useLanguage();
+    const { user } = useAuth();
     const [jsonInput, setJsonInput] = useState(JSON.stringify({
         id: "weather-bot-001",
         name: "WeatherBot",
@@ -44,7 +46,15 @@ export default function RegisterPage() {
     const [copied, setCopied] = useState(false);
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const logsEndRef = useRef<HTMLDivElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
     const [activeTab, setActiveTab] = useState<'logs' | 'code'>('logs');
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            abortControllerRef.current?.abort();
+        };
+    }, []);
 
     // Auto-scroll logs
     useEffect(() => {
@@ -63,6 +73,13 @@ export default function RegisterPage() {
     };
 
     const handleRegister = async () => {
+        // Cancel any pending request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
         setLoading(true);
         setLogs([]);
         setActiveTab('logs');
@@ -77,6 +94,10 @@ export default function RegisterPage() {
             let data: any;
             try {
                 data = JSON.parse(jsonInput);
+                // Inject owner_id if user is logged in
+                if (user?.owner_id) {
+                    data.owner_id = user.owner_id;
+                }
                 addLog(t("register.log_validate"), "success");
             } catch {
                 throw new Error(t("register.invalid_json"));
@@ -104,7 +125,11 @@ export default function RegisterPage() {
             const startTime = Date.now();
             let solution;
             try {
-                solution = await solvePoW(challengeData.nonce, challengeData.difficulty);
+                solution = await solvePoW(challengeData.nonce, {
+                    difficulty: challengeData.difficulty,
+                    signal: controller.signal,
+                    timeoutMs: 60000
+                });
                 const duration = Date.now() - startTime;
                 addLog(t("register.log_puzzle_solved").replace("{duration}", duration.toString()).replace("{solution}", solution), "success");
             } catch (err) {

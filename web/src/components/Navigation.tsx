@@ -3,22 +3,32 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Users, PlusSquare, Github, Globe, Search, BookOpen } from "lucide-react";
+import { LayoutDashboard, Users, PlusSquare, Github, Globe, Search, BookOpen, KeyRound } from "lucide-react";
 import { CommandSearch } from "./CommandSearch";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { useAuth } from "@/contexts/AuthContext";
+import { useState } from "react";
+import { Loader2 } from "lucide-react";
 
 export function Navigation() {
     const pathname = usePathname();
     const { t } = useLanguage();
-
+    const { user, logout } = useAuth();
+    
     const navLinks = [
         { href: "/", label: t("nav.dashboard"), icon: LayoutDashboard },
         { href: "/agents", label: t("nav.market"), icon: Users },
+        { href: "/claim", label: "Claim", icon: KeyRound },
         { href: "/synergy", label: t("nav.synergy"), icon: Globe },
         { href: "/register", label: t("nav.sandbox"), icon: PlusSquare },
         { href: "/guide", label: t("nav.guide"), icon: BookOpen },
     ];
+
+    if (user) {
+        // Insert "My Agents" after Dashboard
+        navLinks.splice(1, 0, { href: "/my-agents", label: "My Agents", icon: Users });
+    }
 
     return (
         <nav className="sticky top-0 z-50 w-full border-b border-white/5 bg-background/80 backdrop-blur-md">
@@ -76,12 +86,28 @@ export function Navigation() {
                         </a>
 
                         <div className="flex items-center gap-2 ml-2">
-                            <button className="text-xs font-medium text-muted-foreground hover:text-white px-3 py-1.5 transition-colors">
-                                {t("nav.sign_in")}
-                            </button>
-                            <button className="text-xs font-medium bg-white text-black px-4 py-1.5 rounded-md hover:bg-white/90 transition-colors">
-                                {t("nav.sign_up")}
-                            </button>
+                            {user ? (
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs text-muted-foreground hidden sm:inline-block">
+                                        {user.phone_number}
+                                    </span>
+                                    <button 
+                                        onClick={logout}
+                                        className="text-xs font-medium text-red-400 hover:text-red-300 px-3 py-1.5 transition-colors border border-red-500/20 rounded-md hover:bg-red-500/10"
+                                    >
+                                        Sign Out
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <Link 
+                                        href="/login"
+                                        className="text-xs font-medium bg-white text-black px-4 py-1.5 rounded-md hover:bg-white/90 transition-colors"
+                                    >
+                                        {t("nav.sign_in")}
+                                    </Link>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

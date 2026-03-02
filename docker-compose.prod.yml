@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Database Service
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentmesh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentmesh_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-agentmesh}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentmesh -d agentmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentmesh-net
+
+  # Cache Service
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agentmesh-net
+
+  # Backend Service
+  api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - AGENTMESH_AUTH_SECRET=${AGENTMESH_AUTH_SECRET:-change-me-in-prod}
+      - AGENTMESH_API_KEY=${AGENTMESH_API_KEY:-change-me-in-prod-api-key}
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-agentmesh}:${POSTGRES_PASSWORD:-agentmesh_pass}@postgres:5432/${POSTGRES_DB:-agentmesh}
+      - REDIS_URL=redis://redis:6379/0
+    command: ["python", "-m", "agentmesh", "serve", "--storage", "postgres", "--postgres-url", "postgresql://agentmesh:agentmesh_pass@postgres:5432/agentmesh", "--redis-url", "redis://redis:6379/0", "--host", "0.0.0.0", "--port", "8000", "--production", "--auth-secret", "${AGENTMESH_AUTH_SECRET:-change-me-in-prod}", "--api-key", "${AGENTMESH_API_KEY:-change-me-in-prod-api-key}"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agentmesh-net
+    expose:
+      - "8000"
+
+  # Frontend Service
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: always
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - api
+    networks:
+      - agentmesh-net
+    expose:
+      - "3000"
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - api
+      - web
+    networks:
+      - agentmesh-net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  agentmesh-net:
+    driver: bridge

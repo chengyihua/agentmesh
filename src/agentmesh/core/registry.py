@@ -20,6 +20,9 @@ from .vector_index import VectorIndexManager
 from .trust import TrustManager, TrustEvent
 from .negotiation import NegotiationManager
 from .pow import PoWManager
+from .health import HealthMonitor
+from .discovery import DiscoveryService
+from .events import event_bus, Event, EventType
 from ..protocols import InvocationRequest, ProtocolGateway, ProtocolInvocationError
 from ..storage import MemoryStorage, StorageBackend
 
@@ -60,12 +63,14 @@ class AgentRegistry:
         self.relay_manager: Optional["RelayManager"] = None
         self.negotiation_manager = NegotiationManager()
         self.pow_manager = PoWManager()
+        self.health_monitor = HealthMonitor(self.storage)
+        self.health_monitor.health_check_interval = 30
+        self.health_monitor.max_unhealthy_time = 300
+        
+        self.discovery = DiscoveryService(vector_index)
 
-        self.health_check_interval = 30
-        self.max_unhealthy_time = 300
         self.prune_timeout = 3600  # 1 hour
         self.min_trust_score = 0.2
-        self._health_check_task: Optional[asyncio.Task] = None
         self._sync_task: Optional[asyncio.Task] = None
         self._sync_interval_seconds = max(1, sync_interval_seconds)
         if enable_storage_sync is None:
@@ -85,9 +90,7 @@ class AgentRegistry:
         await self.storage.connect()
         await self._load_from_storage()
         await self.trust_manager.start()
-        if self._health_check_task is None:
-            self._health_check_task = asyncio.create_task(self._health_check_loop())
-            logger.info("Health check loop started")
+        await self.health_monitor.start(self.agents)
         if self._enable_storage_sync and self._sync_task is None:
             self._sync_task = asyncio.create_task(self._storage_sync_loop())
             logger.info("Storage sync loop started")
@@ -102,14 +105,8 @@ class AgentRegistry:
                 pass
             self._sync_task = None
             logger.info("Storage sync loop stopped")
-        if self._health_check_task:
-            self._health_check_task.cancel()
-            try:
-                await self._health_check_task
-            except asyncio.CancelledError:
-                pass
-            self._health_check_task = None
-            logger.info("Health check loop stopped")
+        
+        await self.health_monitor.stop()
         
         await self.trust_manager.stop()
         await self.storage.close()
@@ -124,45 +121,89 @@ class AgentRegistry:
         }
 
     async def _sync_from_storage(self, force: bool = False) -> bool:
-        stored_agents = await self.storage.list_agents(skip=0, limit=100000)
-        stored_map = {agent.id: agent for agent in stored_agents}
-
-        async with self._state_lock:
-            if not force and self._snapshot(self.agents) == self._snapshot(stored_map):
-                return False
-
-            self.agents = stored_map
-            self._rebuild_indexes()
+        # If force=True, we do a full load (expensive)
+        # If force=False, we try to load only deltas
+        
+        if force:
+            stored_agents = await self.storage.list_agents(skip=0, limit=100000)
+            logger.info(f"Full sync: Loaded {len(stored_agents)} agents from storage")
+        else:
+            # Incremental sync
+            # We use the latest updated_at we have in memory
+            # Subtract a buffer (e.g. 10s) to handle clock skew or race conditions
+            last_ts = 0.0
+            if self.agents:
+                # Find max updated_at
+                last_ts = max(a.updated_at.timestamp() for a in self.agents.values())
+                last_ts = max(0.0, last_ts - 10.0) 
             
-            if self.vector_index:
-                # Rebuild vector index
-                # We do this asynchronously but we need to ensure it's eventually consistent
-                # For simplicity, we just trigger tasks
+            stored_agents = await self.storage.list_agents_since(last_ts)
+            if not stored_agents:
+                return False
+                
+            logger.debug(f"Incremental sync: Loaded {len(stored_agents)} updated agents")
+
+        if force:
+            # Full replace logic
+            stored_map = {agent.id: agent for agent in stored_agents}
+            async with self._state_lock:
+                if not force and self._snapshot(self.agents) == self._snapshot(stored_map):
+                    return False
+
+                self.agents = stored_map
+                self._rebuild_indexes()
+                
+                # ... (rest of full sync logic, metrics init etc)
                 for agent in stored_agents:
-                    asyncio.create_task(self.vector_index.add_agent(agent))
+                    self._agent_metrics.setdefault(
+                        agent.id,
+                        {
+                            "discoveries": 0,
+                            "health_checks": 0,
+                            "heartbeats": 0,
+                            "invocations": 0,
+                            "failed_invocations": 0,
+                            "latency_sum": 0.0,
+                            "latency_count": 0,
+                            "uptime_streak": 0,
+                            "registered_at": agent.created_at,
+                        },
+                    )
+                # Cleanup metrics for removed agents
+                for agent_id in list(self._agent_metrics.keys()):
+                    if agent_id not in self.agents:
+                        self._agent_metrics.pop(agent_id, None)
 
-            for agent in stored_agents:
-                self._agent_metrics.setdefault(
-                    agent.id,
-                    {
-                        "discoveries": 0,
-                        "health_checks": 0,
-                        "heartbeats": 0,
-                        "invocations": 0,
-                        "failed_invocations": 0,
-                        "latency_sum": 0.0,
-                        "latency_count": 0,
-                        "uptime_streak": 0,
-                        "registered_at": agent.created_at,
-                    },
-                )
-
-            for agent_id in list(self._agent_metrics.keys()):
-                if agent_id not in self.agents:
-                    self._agent_metrics.pop(agent_id, None)
-
-            self._search_cache.clear()
-            return True
+                self._search_cache.clear()
+                return True
+        else:
+            # Incremental merge logic
+            async with self._state_lock:
+                changed = False
+                for agent in stored_agents:
+                    existing = self.agents.get(agent.id)
+                    if not existing or existing.updated_at < agent.updated_at:
+                        self.agents[agent.id] = agent
+                        self._update_indexes(agent.id, agent)
+                        
+                        # Init metrics if new
+                        if not existing:
+                            self._agent_metrics.setdefault(
+                                agent.id,
+                                {
+                                    "discoveries": 0,
+                                    "health_checks": 0,
+                                    "heartbeats": 0,
+                                    "invocations": 0,
+                                    "failed_invocations": 0,
+                                    "registered_at": agent.created_at,
+                                },
+                            )
+                        changed = True
+                
+                if changed:
+                    self._search_cache.clear()
+                return changed
 
     def _rebuild_indexes(self) -> None:
         self.skill_index.clear()
@@ -235,6 +276,9 @@ class AgentRegistry:
                 
             await self.storage.upsert_agent(agent_card)
 
+            # Publish event
+            await event_bus.publish(Event(type=EventType.AGENT_REGISTERED, data={"agent_id": agent_card.id}))
+
             self._agent_metrics[agent_card.id] = {
                 "discoveries": 0,
                 "health_checks": 0,
@@ -298,8 +342,15 @@ class AgentRegistry:
             if self.trust_manager:
                 await self.trust_manager.record_event(agent_id, TrustEvent.PROFILE_UPDATE)
 
+            # Publish event
+            await event_bus.publish(Event(type=EventType.AGENT_UPDATED, data={"agent_id": agent_card.id}))
+
             self._search_cache.clear()
-        return True
+        return {
+            "agent_id": agent_card.id,
+            "status": "updated",
+            "updated_at": agent_card.updated_at.isoformat(),
+        }
 
     async def deregister_agent(self, agent_id: str) -> bool:
         async with self._state_lock:
@@ -351,7 +402,9 @@ class AgentRegistry:
         skip: int = 0, 
         limit: int = 100, 
         sort_by: str = "updated_at", 
-        order: str = "desc"
+        order: str = "desc",
+        health_status: Optional[str] = None,
+        owner_id: Optional[str] = None
     ) -> List[AgentCard]:
         """List agents with pagination and sorting."""
         
@@ -373,7 +426,21 @@ class AgentRegistry:
              
         reverse = (order.lower() == "desc")
         
-        agents = sorted(self.agents.values(), key=get_sort_key, reverse=reverse)
+        # Filter agents
+        filtered_agents = self.agents.values()
+        if health_status:
+             filtered_agents = [
+                 a for a in filtered_agents 
+                 if a.health_status.value == health_status
+             ]
+
+        if owner_id:
+             filtered_agents = [
+                 a for a in filtered_agents 
+                 if a.owner_id == owner_id
+             ]
+        
+        agents = sorted(filtered_agents, key=get_sort_key, reverse=reverse)
         paginated = agents[skip : skip + limit]
         
         # Ensure trust score is calculated for returned agents (if not already done)
@@ -482,6 +549,14 @@ class AgentRegistry:
                 tier = "Gold"
             elif composite_score >= 0.7:
                 tier = "Silver"
+            
+            # Calculate additional metrics
+            latency_sum = metrics.get("latency_sum", 0.0)
+            latency_count = metrics.get("latency_count", 0)
+            latency_avg = latency_sum / latency_count if latency_count > 0 else 0.0
+            
+            uptime_streak = metrics.get("uptime_streak", 0)
+            uptime_percentage = (uptime_streak / (uptime_streak + 1)) * 100
                 
             leaderboard.append({
                 "agent_id": agent_id,
@@ -491,7 +566,9 @@ class AgentRegistry:
                 "tier": tier,
                 "metrics": {
                     "heartbeats": heartbeats,
-                    "invocations": invocations
+                    "invocations": invocations,
+                    "latency_avg": round(latency_avg, 4),
+                    "uptime_percentage": round(uptime_percentage, 2)
                 }
             })
             
@@ -701,13 +778,8 @@ class AgentRegistry:
         if agent is None:
             raise ValueError(f"Agent '{agent_id}' not found")
 
-        now = timestamp or datetime.now(timezone.utc)
         async with self._state_lock:
-            agent.health_status = status
-            agent.last_health_check = now
-            agent.last_heartbeat = now
-            agent.updated_at = now
-            await self.storage.upsert_agent(agent)
+            result = await self.health_monitor.record_heartbeat(agent, status, timestamp)
 
             metrics = self._agent_metrics.setdefault(
                 agent_id,
@@ -728,12 +800,7 @@ class AgentRegistry:
         # Record Trust Event: Heartbeat
         await self.trust_manager.record_event(agent_id, TrustEvent.HEARTBEAT)
 
-        return {
-            "agent_id": agent_id,
-            "status": status.value,
-            "timestamp": now.isoformat(),
-            "next_check": (now + timedelta(seconds=self.health_check_interval)).isoformat(),
-        }
+        return result
 
     async def check_agent_health(self, agent_id: str) -> HealthStatus:
         agent = await self.get_agent(agent_id)
@@ -752,14 +819,8 @@ class AgentRegistry:
                 },
             )
             metrics["health_checks"] = metrics.get("health_checks", 0) + 1
-
-            if agent.last_health_check is not None:
-                delta = datetime.now(timezone.utc) - agent.last_health_check.astimezone(timezone.utc)
-                if delta.total_seconds() > self.max_unhealthy_time:
-                    agent.set_health_status(HealthStatus.UNHEALTHY)
-                    await self.storage.upsert_agent(agent)
-
-        return agent.health_status
+            
+            return await self.health_monitor.check_agent(agent)
 
     async def batch_health_check(self, agent_ids: List[str]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
@@ -1057,16 +1118,6 @@ class AgentRegistry:
 
         return final_score, matched_fields
 
-    async def _health_check_loop(self) -> None:
-        while True:
-            try:
-                await asyncio.sleep(self.health_check_interval)
-                await self._perform_health_checks()
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:  # pragma: no cover
-                logger.error("Health check loop error: %s", exc)
-
     async def _storage_sync_loop(self) -> None:
         while True:
             try:
@@ -1078,21 +1129,3 @@ class AgentRegistry:
                 break
             except Exception as exc:  # pragma: no cover
                 logger.error("Storage sync loop error: %s", exc)
-
-    async def _perform_health_checks(self) -> None:
-        now = datetime.now(timezone.utc)
-        async with self._state_lock:
-            for agent_id, agent in list(self.agents.items()):
-                try:
-                    if agent.last_health_check is None:
-                        continue
-
-                    delta = now - agent.last_health_check.astimezone(timezone.utc)
-                    if delta.total_seconds() > self.max_unhealthy_time:
-                        agent.set_health_status(HealthStatus.OFFLINE)
-                        await self.storage.upsert_agent(agent)
-                        logger.warning("Agent %s marked as offline due to stale heartbeat", agent_id)
-                except Exception as exc:  # pragma: no cover
-                    logger.error("Health check failed for %s: %s", agent_id, exc)
-                    agent.set_health_status(HealthStatus.UNHEALTHY)
-                    await self.storage.upsert_agent(agent)

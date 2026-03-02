@@ -44,15 +44,26 @@ export interface Agent {
   tags: string[];
 }
 
+export interface LeaderboardAgent {
+  agent_id: string;
+  name: string;
+  tier: string;
+  trust_score: number;
+  metrics: {
+    heartbeats: number;
+    invocations: number;
+    latency_avg?: number;
+    uptime_percentage?: number;
+  };
+}
+
 export interface ApiError {
   response?: {
     data?: {
       error?: {
         message?: string;
       };
-      detail?: {
-        reason?: string;
-      };
+      detail?: string | { reason?: string } | any;
     };
   };
   message: string;

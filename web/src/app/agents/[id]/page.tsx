@@ -4,6 +4,7 @@ import { useState } from "react";
 import { BaseLayout } from "@/components/BaseLayout";
 import { useAgent, useAgentStats, useClaim } from "@/hooks/useRegistry";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useParams, useRouter } from "next/navigation";
 import {
     ArrowLeft, Globe, Shield, Activity, Tag,
@@ -25,8 +26,8 @@ export default function AgentDetailsPage() {
     const { data: agent, isLoading, isError } = useAgent(id as string);
     const { data: stats } = useAgentStats(id as string);
     const claimMutation = useClaim();
+    const { user, isAuthenticated } = useAuth();
     const [claimCode, setClaimCode] = useState("");
-    const [ownerId, setOwnerId] = useState("");
     const [claimSuccess, setClaimSuccess] = useState(false);
     const [claimError, setClaimError] = useState("");
     const [copied, setCopied] = useState(false);
@@ -41,12 +42,19 @@ export default function AgentDetailsPage() {
 
     const handleClaim = async () => {
         setClaimError("");
+        if (!isAuthenticated) {
+            setClaimError(t("agent_details.login_required"));
+            return;
+        }
         try {
-            await claimMutation.mutateAsync({ agentId: id as string, claimCode, ownerId });
+            await claimMutation.mutateAsync({ agentId: id as string, claimCode });
             setClaimSuccess(true);
-        } catch (e) {
+        } catch (e: any) {
             const err = e as ApiError;
-            setClaimError(err?.response?.data?.error?.message || "Invalid claim code");
+            const errorMsg = typeof err?.response?.data?.detail === 'string' 
+                ? err.response.data.detail 
+                : err?.response?.data?.error?.message || err?.message || "Invalid claim code";
+            setClaimError(errorMsg);
         }
     };
 
@@ -447,43 +455,45 @@ export default function AgentDetailsPage() {
                                 <KeyRound className="w-4 h-4 text-primary" />
                                 {t("agent_details.ownership")}
                             </h3>
-                            {!claimSuccess ? (
-                                <div className="space-y-3">
-                                    <input
-                                        type="text"
-                                        placeholder={t("agent_details.owner_id_placeholder")}
-                                        value={ownerId}
-                                        onChange={(e) => setOwnerId(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary/50 transition-colors"
-                                    />
-                                    <input
-                                        type="text"
-                                        placeholder={t("agent_details.claim_code_placeholder")}
-                                        value={claimCode}
-                                        onChange={(e) => setClaimCode(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary/50 transition-colors"
-                                    />
-                                    {claimError && (
-                                        <p className="text-xs text-destructive flex items-center gap-1">
-                                            <AlertCircle className="w-3 h-3" /> {claimError}
-                                        </p>
-                                    )}
+                            <div className="space-y-3">
+                                <input
+                                    type="text"
+                                    placeholder={t("agent_details.claim_placeholder")}
+                                    value={claimCode}
+                                    onChange={(e) => setClaimCode(e.target.value)}
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-primary/50"
+                                />
+                                
+                                {!isAuthenticated ? (
+                                    <div className="text-center p-4 border border-yellow-500/20 bg-yellow-500/10 rounded-lg">
+                                        <p className="text-yellow-200 text-sm mb-2">Please login to claim this agent</p>
+                                    </div>
+                                ) : (
                                     <button
                                         onClick={handleClaim}
-                                        disabled={claimMutation.isPending || !claimCode || !ownerId}
-                                        className="w-full py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-bold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                        disabled={!claimCode || claimMutation.isPending}
+                                        className="w-full bg-primary hover:bg-primary/90 text-white font-bold py-2 rounded-lg transition-colors disabled:opacity-50"
                                     >
-                                        {claimMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
-                                        {claimMutation.isPending ? t("agent_details.verifying") : t("agent_details.claim_agent")}
+                                        {claimMutation.isPending ? "Claiming..." : t("agent_details.claim_button")}
                                     </button>
-                                </div>
-                            ) : (
-                                <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 flex flex-col items-center text-center">
-                                    <CheckCircle2 className="w-8 h-8 text-green-500 mb-2" />
-                                    <p className="text-sm font-bold text-green-400">{t("agent_details.claim_success")}</p>
-                                    <p className="text-xs text-muted-foreground mt-1">{t("agent_details.claim_success_desc")}</p>
-                                </div>
-                            )}
+                                )}
+
+                                {claimSuccess && (
+                                    <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                                        <p className="text-green-400 text-sm text-center">
+                                            Agent successfully claimed!
+                                        </p>
+                                    </div>
+                                )}
+
+                                {claimError && (
+                                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                                        <p className="text-red-400 text-sm text-center break-all">
+                                            {typeof claimError === 'string' ? claimError : "Failed to claim agent"}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Tags */}

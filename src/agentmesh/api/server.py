@@ -29,6 +29,7 @@ from ..storage import MemoryStorage, PostgresStorage, RedisStorage, StorageBacke
 from ..utils import error_response, success_response, utc_now_iso
 from .routes import limiter as routes_limiter
 from .routes import router, root_router
+from .auth_routes import router as auth_router
 from ..relay.routes import router as relay_router
 from ..relay.manager import RelayManager
 from ..protocols.relay import RelayProtocolHandler
@@ -224,6 +225,7 @@ class AgentMeshServer:
 
         self._add_exception_handlers(app)
         app.include_router(root_router)
+        app.include_router(auth_router, prefix="/api/v1")
         app.include_router(router, prefix="/api/v1")
         app.include_router(relay_router)
 

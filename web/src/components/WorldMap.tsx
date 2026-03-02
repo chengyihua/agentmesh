@@ -38,7 +38,7 @@ export const WorldMap = memo(function WorldMap({ width = 1000, height = 500 }: W
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
-      className="absolute inset-0 w-full h-full pointer-events-none select-none opacity-20"
+      className="absolute inset-0 w-full h-full pointer-events-none select-none opacity-40"
       preserveAspectRatio="xMidYMid meet"
     >
       <defs>
@@ -63,8 +63,8 @@ export const WorldMap = memo(function WorldMap({ width = 1000, height = 500 }: W
             d={pathGenerator(geo) || undefined}
             fill="url(#mapGradient)"
             stroke="currentColor"
-            strokeWidth="0.5"
-            className="text-blue-500/30 transition-all duration-300 hover:fill-blue-500/50 hover:text-blue-400"
+            strokeWidth="1"
+            className="text-blue-400/60 transition-none"
           />
         ))}
       </g>

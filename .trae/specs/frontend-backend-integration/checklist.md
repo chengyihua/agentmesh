@@ -1,0 +1,6 @@
+- [ ] Next.js proxy configured correctly
+- [ ] Backend starts without errors
+- [ ] Frontend starts without errors
+- [ ] Simulation script runs successfully
+- [ ] UI shows new agent appearing automatically
+- [ ] UI shows agent status changing color

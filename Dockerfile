@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy packaging files
 COPY pyproject.toml README.md ./
-COPY src/agentmesh/__init__.py src/agentmesh/
+# Copy source code
+COPY src src/
 
 # Install dependencies (using pip install . to parse pyproject.toml)
 RUN pip install --no-cache-dir build && \

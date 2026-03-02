@@ -3,32 +3,33 @@
 import { BaseLayout } from "@/components/BaseLayout";
 import { AgentCard } from "@/components/AgentCard";
 import { useAgents, useStats } from "@/hooks/useRegistry";
-import { Search, Loader2, AlertCircle, RefreshCw, Shield } from "lucide-react";
+import { useEvents } from "@/hooks/useEvents";
+import { Search, Loader2, AlertCircle, RefreshCw, Shield, ArrowUp, ArrowDown, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function AgentsPage() {
     const { t } = useLanguage();
-    const { data: agents, isLoading, isError, refetch, isRefetching } = useAgents();
-    const { data: stats } = useStats();
+    useEvents();
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState<string>("all");
-    const [sortByTrust, setSortByTrust] = useState(true); // Default to trust-aware
+    const [sortBy, setSortBy] = useState<string>("trust_score");
+    const [order, setOrder] = useState<string>("desc");
+
+    const { data: agents, isLoading, isError, refetch, isRefetching } = useAgents({
+        sort_by: sortBy,
+        order: order,
+        health_status: filter === "all" ? undefined : filter,
+    });
+    const { data: stats } = useStats();
 
     const filteredAgents = agents?.filter((a) => {
         const matchesSearch = a.name.toLowerCase().includes(search.toLowerCase()) ||
             a.id.toLowerCase().includes(search.toLowerCase()) ||
             a.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()));
 
-        const matchesStatus = filter === "all" || a.health_status === filter;
-
-        return matchesSearch && matchesStatus;
-    }).sort((a, b) => {
-        if (sortByTrust) {
-            return (b.trust_score || 0) - (a.trust_score || 0);
-        }
-        return 0;
+        return matchesSearch;
     });
 
     const filterOptions = [
@@ -36,6 +37,12 @@ export default function AgentsPage() {
         { id: "healthy", label: t("market.filter_healthy") },
         { id: "unhealthy", label: t("market.filter_unhealthy") },
         { id: "degraded", label: t("market.filter_degraded") },
+    ];
+
+    const sortOptions = [
+        { id: "trust_score", label: t("market.sort_trust") },
+        { id: "updated_at", label: t("market.sort_updated") },
+        { id: "created_at", label: t("market.sort_created") },
     ];
 
     return (
@@ -94,18 +101,31 @@ export default function AgentsPage() {
                             </button>
                         ))}
                         <div className="w-px h-6 bg-white/10 mx-2"></div>
+                        
+                        <div className="relative">
+                            <select
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value)}
+                                className="appearance-none bg-white/5 border border-white/10 text-xs font-semibold rounded-xl pl-4 pr-10 py-2 text-muted-foreground hover:bg-white/10 focus:outline-none focus:ring-1 focus:ring-primary/20 transition-all cursor-pointer"
+                            >
+                                {sortOptions.map((opt) => (
+                                    <option key={opt.id} value={opt.id} className="bg-gray-900 text-white">
+                                        {opt.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                        </div>
+
                         <button
-                            onClick={() => setSortByTrust(!sortByTrust)}
+                            onClick={() => setOrder(order === "asc" ? "desc" : "asc")}
                             className={cn(
-                                "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold border transition-all whitespace-nowrap",
-                                sortByTrust
-                                    ? "bg-blue-500/20 border-blue-500/40 text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.15)]"
-                                    : "bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10"
+                                "flex items-center justify-center w-8 h-8 rounded-xl border transition-all",
+                                "bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10"
                             )}
-                            title="Rank by Trust Score"
+                            title={order === "asc" ? t("market.order_asc") : t("market.order_desc")}
                         >
-                            <Shield className="w-3.5 h-3.5" />
-                            {t("market.sort_trust")}
+                            {order === "asc" ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />}
                         </button>
                         <div className="w-px h-6 bg-white/10 mx-2"></div>
                         <button

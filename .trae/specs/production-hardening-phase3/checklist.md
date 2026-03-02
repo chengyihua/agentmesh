@@ -1,0 +1,5 @@
+- [x] Alembic initialized and configured
+- [x] Initial migration script generated and reviewed
+- [x] E2E tests (`test_full_flow.py`) pass
+- [x] Docker image builds successfully
+- [x] Docker image size is optimized (checked visually)
